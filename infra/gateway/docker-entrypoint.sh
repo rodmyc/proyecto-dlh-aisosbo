@@ -8,7 +8,8 @@ fi
 
 printf '%s\n' "$DAGSTER_BASIC_AUTH_PASSWORD" \
     | htpasswd -niB "$DAGSTER_BASIC_AUTH_USERNAME" > /etc/nginx/.htpasswd
-chmod 0600 /etc/nginx/.htpasswd
+chown root:nginx /etc/nginx/.htpasswd
+chmod 0640 /etc/nginx/.htpasswd
 unset DAGSTER_BASIC_AUTH_PASSWORD
 
 exec nginx -g 'daemon off;'
