@@ -13,7 +13,14 @@ type UploadResult = {
   bytes: number;
 };
 
+type ChunkResponse = Partial<UploadResult> & {
+  receivedBytes?: number;
+  complete?: boolean;
+  error?: string;
+};
+
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+const CHUNK_BYTES = 8 * 1024 * 1024;
 const TERMINAL_STATUSES = new Set(["SUCCESS", "FAILURE", "CANCELED", "CANCELING"]);
 
 function formatBytes(bytes: number) {
@@ -46,6 +53,8 @@ export default function UploadConsole() {
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<XMLHttpRequest | null>(null);
+  const uploadIdRef = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   const datasetInfo = DATASETS[dataset];
   const isBusy = ["uploading", "launching", "running"].includes(phase);
@@ -114,52 +123,122 @@ export default function UploadConsole() {
     setError("La carga continúa demasiado tiempo. Revisa su estado directamente en Dagster.");
   }
 
-  function startUpload() {
+  function sendChunk(
+    chunk: Blob,
+    offset: number,
+    uploadId: string,
+    sourceFile: File,
+  ): Promise<ChunkResponse> {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      requestRef.current = request;
+      request.open("POST", "/cargas/api/ingestions");
+      request.setRequestHeader("content-type", "application/octet-stream");
+      request.setRequestHeader("x-dataset", dataset);
+      request.setRequestHeader("x-file-name", encodeURIComponent(sourceFile.name));
+      request.setRequestHeader("x-upload-id", uploadId);
+      request.setRequestHeader("x-file-size", String(sourceFile.size));
+      request.setRequestHeader("x-chunk-offset", String(offset));
+
+      request.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const uploaded = offset + event.loaded;
+        setProgress(Math.round((uploaded / sourceFile.size) * 100));
+        if (uploaded === sourceFile.size) setPhase("launching");
+      };
+      request.onerror = () => reject(new Error("Se interrumpió la conexión durante la subida."));
+      request.onabort = () => reject(new DOMException("Subida cancelada", "AbortError"));
+      request.onload = () => {
+        requestRef.current = null;
+        let payload: ChunkResponse;
+        try {
+          payload = JSON.parse(request.responseText) as ChunkResponse;
+        } catch {
+          reject(new Error(`El proxy devolvió una respuesta inválida (HTTP ${request.status}).`));
+          return;
+        }
+
+        if ((request.status >= 200 && request.status < 300) || request.status === 409) {
+          resolve(payload);
+          return;
+        }
+        reject(new Error(payload.error || `La subida falló con HTTP ${request.status}.`));
+      };
+      request.send(chunk);
+    });
+  }
+
+  async function startUpload() {
     if (!file || isBusy) return;
     setError("");
     setResult(null);
     setProgress(0);
     setPhase("uploading");
+    cancelledRef.current = false;
+    const uploadId = crypto.randomUUID();
+    uploadIdRef.current = uploadId;
 
-    const request = new XMLHttpRequest();
-    requestRef.current = request;
-    request.open("POST", "/cargas/api/ingestions");
-    request.setRequestHeader("content-type", "application/octet-stream");
-    request.setRequestHeader("x-dataset", dataset);
-    request.setRequestHeader("x-file-name", encodeURIComponent(file.name));
+    try {
+      let offset = 0;
+      let failures = 0;
+      while (offset < file.size) {
+        const end = Math.min(offset + CHUNK_BYTES, file.size);
+        let payload: ChunkResponse;
+        try {
+          payload = await sendChunk(file.slice(offset, end), offset, uploadId, file);
+          failures = 0;
+        } catch (uploadError) {
+          if (cancelledRef.current || (uploadError instanceof DOMException && uploadError.name === "AbortError")) {
+            return;
+          }
+          failures += 1;
+          if (failures > 2) throw uploadError;
+          await new Promise((resolve) => window.setTimeout(resolve, 800));
+          continue;
+        }
 
-    request.upload.onprogress = (event) => {
-      if (event.lengthComputable) setProgress(Math.round((event.loaded / event.total) * 100));
-    };
-    request.upload.onload = () => setPhase("launching");
-    request.onerror = () => {
+        if (typeof payload.receivedBytes !== "number") {
+          throw new Error("El servidor no confirmó la posición recibida.");
+        }
+        offset = payload.receivedBytes;
+        if (payload.complete) {
+          if (!payload.runId || !payload.status || !payload.originalName || !payload.bytes) {
+            throw new Error("Dagster no devolvió una ejecución válida.");
+          }
+          const completedUpload = payload as UploadResult;
+          setResult(completedUpload);
+          setPhase("running");
+          uploadIdRef.current = null;
+          void watchRun(completedUpload.runId);
+          return;
+        }
+        setPhase("uploading");
+      }
+    } catch (uploadError) {
       setPhase("error");
-      setError("Se interrumpió la conexión durante la subida. Puedes volver a intentarlo.");
-    };
-    request.onabort = () => {
-      setPhase("idle");
-      setProgress(0);
-    };
-    request.onload = () => {
+      setError(
+        uploadError instanceof Error
+          ? `${uploadError.message} Puedes volver a intentarlo.`
+          : "No se pudo completar la subida. Puedes volver a intentarlo.",
+      );
+    } finally {
       requestRef.current = null;
-      let payload: UploadResult & { error?: string };
-      try {
-        payload = JSON.parse(request.responseText) as UploadResult & { error?: string };
-      } catch {
-        setPhase("error");
-        setError("El servidor devolvió una respuesta que no se pudo interpretar.");
-        return;
-      }
-      if (request.status < 200 || request.status >= 300 || !payload.runId) {
-        setPhase("error");
-        setError(payload.error || `La subida falló con HTTP ${request.status}.`);
-        return;
-      }
-      setResult(payload);
-      setPhase("running");
-      void watchRun(payload.runId);
-    };
-    request.send(file);
+    }
+  }
+
+  function cancelUpload() {
+    cancelledRef.current = true;
+    requestRef.current?.abort();
+    const uploadId = uploadIdRef.current;
+    uploadIdRef.current = null;
+    if (uploadId) {
+      void fetch("/cargas/api/ingestions", {
+        method: "DELETE",
+        headers: { "x-upload-id": uploadId },
+      });
+    }
+    setPhase("idle");
+    setProgress(0);
   }
 
   function reset() {
@@ -264,7 +343,7 @@ export default function UploadConsole() {
 
           <div className="form-actions">
             {phase === "uploading" ? (
-              <button className="secondary-button" type="button" onClick={() => requestRef.current?.abort()}>Cancelar subida</button>
+              <button className="secondary-button" type="button" onClick={cancelUpload}>Cancelar subida</button>
             ) : phase === "success" ? (
               <button className="primary-button" type="button" onClick={reset}>Cargar otro archivo</button>
             ) : (

@@ -1,10 +1,9 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { launchIngestion } from "@/app/lib/dagster";
@@ -15,6 +14,8 @@ export const dynamic = "force-dynamic";
 
 const INGESTION_ROOT = process.env.INGESTION_ROOT ?? "/opt/app/data/incoming";
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES ?? 512 * 1024 * 1024);
+const MAX_CHUNK_BYTES = 10 * 1024 * 1024;
+const UPLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/i;
 
 function safeFilename(encodedName: string) {
   let decodedName: string;
@@ -35,22 +36,45 @@ function safeFilename(encodedName: string) {
   return cleanName;
 }
 
+function integerHeader(request: Request, name: string) {
+  const value = Number(request.headers.get(name));
+  return Number.isSafeInteger(value) ? value : -1;
+}
+
+async function fileSize(path: string) {
+  try {
+    return (await stat(path)).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
 export async function POST(request: Request) {
   const dataset = request.headers.get("x-dataset") ?? "";
+  const uploadId = request.headers.get("x-upload-id") ?? "";
   const encodedName = request.headers.get("x-file-name") ?? "";
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  const chunkBytes = integerHeader(request, "content-length");
+  const totalBytes = integerHeader(request, "x-file-size");
+  const chunkOffset = integerHeader(request, "x-chunk-offset");
 
   if (!isDatasetKey(dataset)) {
     return NextResponse.json({ error: "Selecciona un tipo de información válido." }, { status: 400 });
   }
-  if (!request.body || !Number.isFinite(contentLength) || contentLength <= 0) {
-    return NextResponse.json({ error: "Selecciona un archivo con contenido." }, { status: 400 });
+  if (!UPLOAD_ID_PATTERN.test(uploadId)) {
+    return NextResponse.json({ error: "Identificador de subida inválido." }, { status: 400 });
   }
-  if (contentLength > MAX_UPLOAD_BYTES) {
+  if (!request.body || chunkBytes <= 0 || chunkBytes > MAX_CHUNK_BYTES) {
+    return NextResponse.json({ error: "El bloque del archivo no es válido." }, { status: 400 });
+  }
+  if (totalBytes <= 0 || totalBytes > MAX_UPLOAD_BYTES) {
     return NextResponse.json(
       { error: `El archivo supera el límite de ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)} MB.` },
       { status: 413 },
     );
+  }
+  if (chunkOffset < 0 || chunkOffset + chunkBytes > totalBytes) {
+    return NextResponse.json({ error: "La posición del bloque no es válida." }, { status: 400 });
   }
 
   let originalName: string;
@@ -71,16 +95,35 @@ export async function POST(request: Request) {
     );
   }
 
-  const datasetDirectory = join(/* turbopackIgnore: true */ INGESTION_ROOT, dataset);
-  const storedName = `${new Date().toISOString().slice(0, 10)}-${randomUUID()}-${originalName}`;
-  const finalPath = join(datasetDirectory, storedName);
-  const temporaryPath = `${finalPath}.uploading`;
+  const uploadDirectory = join(/* turbopackIgnore: true */ INGESTION_ROOT, ".uploads");
+  const partialPath = join(uploadDirectory, `${uploadId}.part`);
 
   try {
-    await mkdir(datasetDirectory, { recursive: true });
+    await mkdir(uploadDirectory, { recursive: true });
+    const receivedBefore = await fileSize(partialPath);
+    if (receivedBefore !== chunkOffset) {
+      return NextResponse.json(
+        { error: "La subida debe reanudarse desde la última posición recibida.", receivedBytes: receivedBefore },
+        { status: 409 },
+      );
+    }
+
     const source = Readable.fromWeb(request.body as NodeReadableStream<Uint8Array>);
-    await pipeline(source, createWriteStream(temporaryPath, { flags: "wx", mode: 0o644 }));
-    await rename(temporaryPath, finalPath);
+    const flags = receivedBefore === 0 ? "wx" : "a";
+    await pipeline(source, createWriteStream(partialPath, { flags, mode: 0o644 }));
+    const receivedBytes = await fileSize(partialPath);
+    if (receivedBytes !== chunkOffset + chunkBytes) {
+      throw new Error("El tamaño recibido no coincide con el bloque enviado.");
+    }
+    if (receivedBytes < totalBytes) {
+      return NextResponse.json({ uploadId, receivedBytes, complete: false }, { status: 202 });
+    }
+
+    const datasetDirectory = join(/* turbopackIgnore: true */ INGESTION_ROOT, dataset);
+    await mkdir(datasetDirectory, { recursive: true });
+    const storedName = `${new Date().toISOString().slice(0, 10)}-${uploadId}-${originalName}`;
+    const finalPath = join(datasetDirectory, storedName);
+    await rename(partialPath, finalPath);
 
     const filePath = relative(INGESTION_ROOT, finalPath).replaceAll("\\", "/");
     const run = await launchIngestion(dataset, filePath);
@@ -90,13 +133,14 @@ export async function POST(request: Request) {
         status: run.status,
         dataset,
         originalName,
-        bytes: contentLength,
+        bytes: totalBytes,
+        receivedBytes,
+        complete: true,
       },
       { status: 201 },
     );
   } catch (error) {
-    await rm(temporaryPath, { force: true }).catch(() => undefined);
-    console.error("Upload or Dagster launch failed", error);
+    console.error("Chunk upload or Dagster launch failed", error);
     return NextResponse.json(
       {
         error:
@@ -107,4 +151,19 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   }
+}
+
+export async function DELETE(request: Request) {
+  const uploadId = request.headers.get("x-upload-id") ?? "";
+  if (!UPLOAD_ID_PATTERN.test(uploadId)) {
+    return NextResponse.json({ error: "Identificador de subida inválido." }, { status: 400 });
+  }
+
+  const partialPath = join(
+    /* turbopackIgnore: true */ INGESTION_ROOT,
+    ".uploads",
+    `${uploadId}.part`,
+  );
+  await rm(partialPath, { force: true });
+  return new NextResponse(null, { status: 204 });
 }
