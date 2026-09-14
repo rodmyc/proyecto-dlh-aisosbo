@@ -45,6 +45,7 @@ __pycache__/
 
 # lakehouse data (keep generated data out of git)
 /data/
+/exportaciones/
 
 # vercel
 .vercel
