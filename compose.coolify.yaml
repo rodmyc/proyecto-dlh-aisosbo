@@ -87,6 +87,26 @@ services:
       dagster-code:
         condition: service_healthy
 
+  dagster-gateway:
+    build:
+      context: .
+      dockerfile: infra/gateway/Dockerfile
+    image: lakehouse-dagster-gateway:1.0
+    restart: unless-stopped
+    environment:
+      DAGSTER_BASIC_AUTH_USERNAME: ${DAGSTER_BASIC_AUTH_USERNAME}
+      DAGSTER_BASIC_AUTH_PASSWORD: ${DAGSTER_BASIC_AUTH_PASSWORD}
+    expose:
+      - "8080"
+    depends_on:
+      - dagster-webserver
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   dagster-daemon:
     <<: *dagster-common
     command:
