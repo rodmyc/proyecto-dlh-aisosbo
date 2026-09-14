@@ -12,6 +12,7 @@ x-dagster-common: &dagster-common
     DAGSTER_PG_DB: ${DAGSTER_PG_DB:?}
     DAGSTER_PG_USER: ${DAGSTER_PG_USER:?}
     DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?}
+    INGESTION_ROOT: /opt/dagster/data/incoming
     STAGING_PATH: /opt/dagster/data/staging
     SALESFORCE_USERNAME: ${SALESFORCE_USERNAME:-}
     SALESFORCE_PASSWORD: ${SALESFORCE_PASSWORD:-}
@@ -42,6 +43,7 @@ services:
       - "4000"
     volumes:
       - dagster_storage:/opt/dagster/storage
+      - incoming_data:/opt/dagster/data/incoming
       - staging_data:/opt/dagster/data/staging
     healthcheck:
       test: ["CMD", "dagster", "api", "grpc-health-check", "--port", "4000"]
@@ -99,4 +101,5 @@ services:
 
 volumes:
   dagster_storage:
+  incoming_data:
   staging_data:

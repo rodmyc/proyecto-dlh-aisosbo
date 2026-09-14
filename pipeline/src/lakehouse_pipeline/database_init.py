@@ -1,5 +1,6 @@
 import os
 import time
+from importlib.resources import files
 
 import psycopg
 
@@ -18,9 +19,18 @@ def initialize_database() -> None:
     for attempt in range(1, 13):
         try:
             with psycopg.connect(**connection_options) as connection:
-                connection.execute("CREATE SCHEMA IF NOT EXISTS raw")
-                connection.execute("CREATE SCHEMA IF NOT EXISTS analytics")
-            print("PostgreSQL connection verified; raw and analytics schemas are ready.")
+                migration_root = files("lakehouse_pipeline.sql")
+                migrations = sorted(
+                    migration
+                    for migration in migration_root.iterdir()
+                    if migration.name.endswith(".sql")
+                )
+                for migration in migrations:
+                    script = migration.read_text(encoding="utf-8")
+                    for statement in script.split(";"):
+                        if statement.strip():
+                            connection.execute(statement)
+            print("PostgreSQL connection verified; database migrations are ready.")
             return
         except psycopg.OperationalError:
             if attempt == 12:

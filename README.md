@@ -53,6 +53,20 @@ Set-Location pipeline
 La definición inicial `staging_toolchain_check` permite materializar un archivo
 Parquet pequeño y comprobar que Dagster, Polars y la ruta de staging funcionan.
 
+El job `ingest_export_job` procesa un archivo por ejecución. Requiere dos valores
+de configuración: `dataset` y `file_path`. La ruta siempre es relativa a
+`INGESTION_ROOT`; las rutas absolutas y los recorridos fuera de ese directorio se
+rechazan. Los datasets admitidos son `campaigns`, `contacts`, `accounts`,
+`recurring_donations`, `opportunities` y `historical_donations`.
+
+Cada ejecución calcula SHA-256, evita reprocesar archivos idénticos, genera un
+Parquet Zstandard en staging y usa `COPY` más `ON CONFLICT` para cargar PostgreSQL.
+Los resultados por lote quedan en `etl.ingestion_batch`. Las oportunidades
+mantienen su estado vigente en `raw.salesforce_opportunity_current` y su evolución
+en `history.salesforce_opportunity_status`. El kardex completo se consulta en
+`analytics.donor_kardex`; los pagos efectivos están en
+`analytics.fact_effective_payment`.
+
 ## Verificación
 
 ```powershell
@@ -78,4 +92,5 @@ dominio público, apuntando a su puerto interno `8080`.
 
 Los datos analíticos y los metadatos de Dagster quedan en el PostgreSQL externo.
 Los logs/metadatos locales de ejecución y el staging Parquet se conservan en los
-volúmenes persistentes de la aplicación.
+volúmenes persistentes de la aplicación. Los archivos recibidos se guardan en el
+volumen `incoming_data`, que posteriormente compartirá el frontend Next.js.
