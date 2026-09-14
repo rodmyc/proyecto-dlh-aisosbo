@@ -1,0 +1,106 @@
+name: lakehouse-dagster
+
+x-dagster-common: &dagster-common
+  build:
+    context: .
+    dockerfile: infra/dagster/Dockerfile
+  image: lakehouse-dagster:1.13.22
+  restart: unless-stopped
+  environment: &dagster-environment
+    DAGSTER_HOME: /opt/dagster/dagster_home
+    DAGSTER_PG_HOST: postgres
+    DAGSTER_PG_DB: ${POSTGRES_DB:-lakehouse}
+    DAGSTER_PG_USER: ${POSTGRES_USER:-lakehouse}
+    DAGSTER_PG_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    STAGING_PATH: /opt/dagster/data/staging
+    SALESFORCE_USERNAME: ${SALESFORCE_USERNAME:-}
+    SALESFORCE_PASSWORD: ${SALESFORCE_PASSWORD:-}
+    SALESFORCE_SECURITY_TOKEN: ${SALESFORCE_SECURITY_TOKEN:-}
+    SALESFORCE_DOMAIN: ${SALESFORCE_DOMAIN:-login}
+  volumes:
+    - dagster_storage:/opt/dagster/storage
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: infra/postgres/Dockerfile
+    image: lakehouse-postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lakehouse}
+      POSTGRES_USER: ${POSTGRES_USER:-lakehouse}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  dagster-code:
+    <<: *dagster-common
+    command:
+      - dagster
+      - code-server
+      - start
+      - --host
+      - 0.0.0.0
+      - --port
+      - "4000"
+      - --module-name
+      - lakehouse_pipeline
+    expose:
+      - "4000"
+    volumes:
+      - dagster_storage:/opt/dagster/storage
+      - staging_data:/opt/dagster/data/staging
+    healthcheck:
+      test: ["CMD", "dagster", "api", "grpc-health-check", "--port", "4000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  dagster-webserver:
+    <<: *dagster-common
+    command:
+      - dagster-webserver
+      - --host
+      - 0.0.0.0
+      - --port
+      - "3000"
+      - --workspace
+      - /opt/dagster/dagster_home/workspace.yaml
+    expose:
+      - "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dagster-code:
+        condition: service_healthy
+
+  dagster-daemon:
+    <<: *dagster-common
+    command:
+      - dagster-daemon
+      - run
+      - --workspace
+      - /opt/dagster/dagster_home/workspace.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      dagster-code:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  dagster_storage:
+  staging_data:

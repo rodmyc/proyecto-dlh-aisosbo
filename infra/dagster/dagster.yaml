@@ -1,0 +1,33 @@
+storage:
+  postgres:
+    postgres_db:
+      hostname:
+        env: DAGSTER_PG_HOST
+      username:
+        env: DAGSTER_PG_USER
+      password:
+        env: DAGSTER_PG_PASSWORD
+      db_name:
+        env: DAGSTER_PG_DB
+      port: 5432
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 2
+
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: /opt/dagster/storage/compute_logs
+
+local_artifact_storage:
+  module: dagster.core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir: /opt/dagster/storage/artifacts
+
+telemetry:
+  enabled: false

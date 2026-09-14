@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Pipeline ELT / Lakehouse
 
-## Getting Started
+Monorepo inicial para extraer datos de Salesforce, almacenarlos en una capa de
+staging Parquet, transformarlos con Polars y publicar modelos analíticos en
+PostgreSQL. Dagster orquesta el pipeline y Next.js sirve como frontend.
 
-First, run the development server:
+## Componentes
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- `app/`: frontend Next.js 16, React 19, TypeScript y Tailwind CSS.
+- `pipeline/`: proyecto Python 3.13 con Dagster, Polars, Psycopg y el cliente de Salesforce.
+- `data/staging/`: archivos Parquet generados localmente (ignorados por Git).
+- `infra/postgres/init/`: inicialización de los esquemas PostgreSQL.
+- `compose.yaml`: PostgreSQL local reproducible; la misma definición sirve como base para la VPS.
+- `compose.coolify.yaml`: despliegue productivo de Dagster OSS y PostgreSQL en Coolify.
+
+## Requisitos
+
+- Node.js 20.9 o superior (se detectó Node.js 22).
+- Python 3.13.
+- Docker Engine con Docker Compose para ejecutar PostgreSQL.
+
+## Configuración inicial
+
+En PowerShell, desde la raíz del repositorio:
+
+```powershell
+Copy-Item .env.example .env
+py -3.13 -m venv pipeline/.venv
+pipeline/.venv/Scripts/python -m pip install --editable ./pipeline --group dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Antes de iniciar PostgreSQL, cambia `POSTGRES_PASSWORD` en `.env`. Luego:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```powershell
+docker compose up -d postgres
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Desarrollo
 
-## Learn More
+Frontend (puerto 3000):
 
-To learn more about Next.js, take a look at the following resources:
+```powershell
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Dagster (por defecto también intenta usar el puerto 3000, por eso se asigna 3001):
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```powershell
+Set-Location pipeline
+.venv/Scripts/dg dev --port 3001
+```
 
-## Deploy on Vercel
+La definición inicial `staging_toolchain_check` permite materializar un archivo
+Parquet pequeño y comprobar que Dagster, Polars y la ruta de staging funcionan.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Verificación
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```powershell
+npm run lint
+npm run build
+pipeline/.venv/Scripts/python -m pytest pipeline/tests
+pipeline/.venv/Scripts/ruff check pipeline
+```
+
+Las credenciales de Salesforce y PostgreSQL se leen desde variables de entorno.
+El archivo `.env` nunca debe versionarse; `.env.example` solo documenta las claves.
+
+## Despliegue en Coolify
+
+El archivo `compose.coolify.yaml` construye servicios separados para el servidor
+web, el daemon, la ubicación de código y PostgreSQL. Solo `dagster-webserver`
+debe recibir un dominio público en Coolify, apuntando a su puerto interno `3000`.
+Los datos de PostgreSQL, los metadatos/logs de Dagster y el staging Parquet se
+guardan en volúmenes persistentes independientes.

@@ -1,0 +1,12 @@
+.git
+.gitignore
+.next
+node_modules
+data
+pipeline/.venv
+pipeline/.pytest_cache
+pipeline/.ruff_cache
+pipeline/.test-tmp
+.env
+.env.*
+*.log

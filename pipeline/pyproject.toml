@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lakehouse-pipeline"
+version = "0.1.0"
+description = "ELT assets for Salesforce, Parquet staging, and PostgreSQL analytics."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "dagster>=1.13,<1.14",
+  "dagster-dg-cli>=1.13,<1.14",
+  "dagster-postgres>=0.29,<0.30",
+  "dagster-webserver>=1.13,<1.14",
+  "polars>=1.35,<2",
+  "psycopg[binary,pool]>=3.2,<4",
+  "pydantic-settings>=2.10,<3",
+  "simple-salesforce>=1.12,<2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<10",
+  "ruff>=0.13,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lakehouse_pipeline"]
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "lakehouse_pipeline"
+
+[tool.dg.cli]
+suppress_warnings = ["project_and_activated_venv_mismatch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
