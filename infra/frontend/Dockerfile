@@ -7,7 +7,9 @@ FROM node:22-alpine AS builder
 WORKDIR /opt/app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /opt/app/node_modules ./node_modules
-COPY . .
+COPY app ./app
+COPY public ./public
+COPY next.config.ts postcss.config.mjs tsconfig.json ./
 RUN npm run build
 
 FROM node:22-alpine AS runner
