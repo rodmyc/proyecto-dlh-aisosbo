@@ -8,10 +8,10 @@ x-dagster-common: &dagster-common
   restart: unless-stopped
   environment: &dagster-environment
     DAGSTER_HOME: /opt/dagster/dagster_home
-    DAGSTER_PG_HOST: postgres
-    DAGSTER_PG_DB: ${POSTGRES_DB:-lakehouse}
-    DAGSTER_PG_USER: ${POSTGRES_USER:-lakehouse}
-    DAGSTER_PG_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    DAGSTER_PG_HOST: ${DAGSTER_PG_HOST:?}
+    DAGSTER_PG_DB: ${DAGSTER_PG_DB:?}
+    DAGSTER_PG_USER: ${DAGSTER_PG_USER:?}
+    DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?}
     STAGING_PATH: /opt/dagster/data/staging
     SALESFORCE_USERNAME: ${SALESFORCE_USERNAME:-}
     SALESFORCE_PASSWORD: ${SALESFORCE_PASSWORD:-}
@@ -20,30 +20,26 @@ x-dagster-common: &dagster-common
   volumes:
     - dagster_storage:/opt/dagster/storage
   depends_on:
-    postgres:
-      condition: service_healthy
+    database-init:
+      condition: service_completed_successfully
 
 services:
-  postgres:
-    build:
-      context: .
-      dockerfile: infra/postgres/Dockerfile
-    image: lakehouse-postgres:17
-    restart: unless-stopped
+  database-init:
+    image: postgres:17-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-lakehouse}
-      POSTGRES_USER: ${POSTGRES_USER:-lakehouse}
-      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
-      TZ: UTC
-      PGTZ: UTC
+      PGHOST: ${DAGSTER_PG_HOST:?}
+      PGPORT: ${DAGSTER_PG_PORT:-5432}
+      PGDATABASE: ${DAGSTER_PG_DB:?}
+      PGUSER: ${DAGSTER_PG_USER:?}
+      PGPASSWORD: ${DAGSTER_PG_PASSWORD:?}
+    command:
+      - psql
+      - --set
+      - ON_ERROR_STOP=1
+      - --file
+      - /init/001_schemas.sql
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
+      - ./infra/postgres/init/001_schemas.sql:/init/001_schemas.sql:ro
 
   dagster-code:
     <<: *dagster-common
@@ -82,8 +78,8 @@ services:
     expose:
       - "3000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      database-init:
+        condition: service_completed_successfully
       dagster-code:
         condition: service_healthy
 
@@ -115,12 +111,11 @@ services:
       - --workspace
       - /opt/dagster/dagster_home/workspace.yaml
     depends_on:
-      postgres:
-        condition: service_healthy
+      database-init:
+        condition: service_completed_successfully
       dagster-code:
         condition: service_healthy
 
 volumes:
-  postgres_data:
   dagster_storage:
   staging_data:

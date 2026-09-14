@@ -11,7 +11,7 @@ PostgreSQL. Dagster orquesta el pipeline y Next.js sirve como frontend.
 - `data/staging/`: archivos Parquet generados localmente (ignorados por Git).
 - `infra/postgres/init/`: inicialización de los esquemas PostgreSQL.
 - `compose.yaml`: PostgreSQL local reproducible; la misma definición sirve como base para la VPS.
-- `compose.coolify.yaml`: despliegue productivo de Dagster OSS y PostgreSQL en Coolify.
+- `compose.coolify.yaml`: despliegue productivo de Dagster OSS conectado a un PostgreSQL externo en Coolify.
 
 ## Requisitos
 
@@ -68,7 +68,13 @@ El archivo `.env` nunca debe versionarse; `.env.example` solo documenta las clav
 ## Despliegue en Coolify
 
 El archivo `compose.coolify.yaml` construye servicios separados para el servidor
-web, el daemon, la ubicación de código y PostgreSQL. Solo `dagster-webserver`
-debe recibir un dominio público en Coolify, apuntando a su puerto interno `3000`.
-Los datos de PostgreSQL, los metadatos/logs de Dagster y el staging Parquet se
-guardan en volúmenes persistentes independientes.
+web, el daemon, la ubicación de código, la pasarela autenticada y una tarea
+idempotente de inicialización de esquemas. No ejecuta un servidor PostgreSQL.
+La aplicación debe conectarse a la red predefinida de Coolify y recibe la conexión
+mediante `DAGSTER_PG_HOST`, `DAGSTER_PG_PORT`, `DAGSTER_PG_DB`,
+`DAGSTER_PG_USER` y `DAGSTER_PG_PASSWORD`. Solo `dagster-gateway` recibe el
+dominio público, apuntando a su puerto interno `8080`.
+
+Los datos analíticos y los metadatos de Dagster quedan en el PostgreSQL externo.
+Los logs/metadatos locales de ejecución y el staging Parquet se conservan en los
+volúmenes persistentes de la aplicación.
