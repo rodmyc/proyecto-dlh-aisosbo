@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -88,6 +89,38 @@ def scan_source(path: Path) -> pl.LazyFrame:
     if path.suffix.casefold() == ".parquet":
         return pl.scan_parquet(path)
     raise ValueError("Only CSV and Parquet files are supported")
+
+
+def _is_utf8(path: Path) -> bool:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as source:
+            while source.read(1024 * 1024):
+                pass
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def prepare_source(path: Path, batch_id: UUID) -> tuple[pl.LazyFrame, Path | None]:
+    if path.suffix.casefold() != ".csv" or _is_utf8(path):
+        return scan_source(path), None
+
+    staging_root = Path(os.getenv("STAGING_PATH", "../data/staging")).resolve()
+    normalized_path = staging_root / "_normalized" / f"{batch_id}.csv"
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for encoding in ("cp1252", "iso-8859-1"):
+        try:
+            with (
+                path.open("r", encoding=encoding, newline="") as source,
+                normalized_path.open("w", encoding="utf-8", newline="") as destination,
+            ):
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+            return scan_source(normalized_path), normalized_path
+        except UnicodeDecodeError:
+            normalized_path.unlink(missing_ok=True)
+
+    raise ValueError("The CSV encoding could not be converted to UTF-8")
 
 
 def validate_source(dataset: str, frame: pl.LazyFrame) -> tuple[str, int]:
@@ -619,8 +652,9 @@ def ingest_file(dataset: str, file_path: str) -> IngestionResult:
         if already_completed:
             return _completed_result(connection, batch_id)
 
+    normalized_source: Path | None = None
     try:
-        source_frame = scan_source(source)
+        source_frame, normalized_source = prepare_source(source, batch_id)
         key_column, row_count = validate_source(dataset, source_frame)
         staging_path = write_staging_parquet(dataset, batch_id, source_frame)
         staging_batches = pl.scan_parquet(staging_path).collect_batches(
@@ -663,3 +697,6 @@ def ingest_file(dataset: str, file_path: str) -> IngestionResult:
     except Exception as error:
         _mark_failed(batch_id, error)
         raise
+    finally:
+        if normalized_source is not None:
+            normalized_source.unlink(missing_ok=True)

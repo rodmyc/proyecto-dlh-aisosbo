@@ -6,6 +6,7 @@ import pytest
 
 from lakehouse_pipeline.ingestion import (
     opportunity_status_group,
+    prepare_source,
     resolve_source_path,
     scan_source,
     validate_frame,
@@ -71,3 +72,14 @@ def test_lazy_csv_validation_and_staging(tmp_path, monkeypatch):
         {"ID": "001", "NAME": "Ana"},
         {"ID": "002", "NAME": "Luis"},
     ]
+
+
+def test_prepare_source_transcodes_windows_1252_without_losing_accents(tmp_path, monkeypatch):
+    source = tmp_path / "campaigns.csv"
+    source.write_bytes("ID,NAME\n001,Campaña Niño\n".encode("cp1252"))
+    monkeypatch.setenv("STAGING_PATH", str(tmp_path / "staging"))
+
+    lazy_frame, normalized_path = prepare_source(source, uuid4())
+
+    assert normalized_path is not None
+    assert lazy_frame.collect().to_dicts() == [{"ID": "001", "NAME": "Campaña Niño"}]
