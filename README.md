@@ -68,8 +68,9 @@ El archivo `.env` nunca debe versionarse; `.env.example` solo documenta las clav
 ## Despliegue en Coolify
 
 El archivo `compose.coolify.yaml` construye servicios separados para el servidor
-web, el daemon, la ubicación de código, la pasarela autenticada y una tarea
-idempotente de inicialización de esquemas. No ejecuta un servidor PostgreSQL.
+web, el daemon, la ubicación de código y la pasarela autenticada. El proceso de
+código inicializa de forma idempotente los esquemas antes de arrancar. El stack
+no ejecuta un servidor PostgreSQL.
 La aplicación debe conectarse a la red predefinida de Coolify y recibe la conexión
 mediante `DAGSTER_PG_HOST`, `DAGSTER_PG_PORT`, `DAGSTER_PG_DB`,
 `DAGSTER_PG_USER` y `DAGSTER_PG_PASSWORD`. Solo `dagster-gateway` recibe el
