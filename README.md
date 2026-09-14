@@ -67,6 +67,18 @@ en `history.salesforce_opportunity_status`. El kardex completo se consulta en
 `analytics.donor_kardex`; los pagos efectivos están en
 `analytics.fact_effective_payment`.
 
+## Centro de cargas
+
+El frontend Next.js se publica en `/cargas`, detrás de la misma autenticación
+HTTP del dominio de Dagster. La pantalla permite elegir el dataset, subir archivos
+CSV o Parquet de hasta 512 MB y observar por separado el progreso de transferencia
+y el procesamiento de Dagster.
+
+La subida se transmite al volumen persistente `incoming_data` sin cargar el archivo
+completo en memoria. Al terminar, Next.js inicia `ingest_export_job` por la red
+interna de Docker y consulta su estado hasta que finaliza. El histórico requiere
+`.parquet`; los demás datasets requieren `.csv`.
+
 ## Verificación
 
 ```powershell

@@ -22,6 +22,23 @@ x-dagster-common: &dagster-common
     - dagster_storage:/opt/dagster/storage
 
 services:
+  next-web:
+    build:
+      context: .
+      dockerfile: infra/frontend/Dockerfile
+    image: lakehouse-frontend:1.0
+    restart: unless-stopped
+    environment:
+      DAGSTER_GRAPHQL_URL: http://dagster-webserver:3000/graphql
+      INGESTION_ROOT: /opt/app/data/incoming
+      MAX_UPLOAD_BYTES: "536870912"
+    expose:
+      - "3000"
+    volumes:
+      - incoming_data:/opt/app/data/incoming
+    depends_on:
+      - dagster-webserver
+
   dagster-code:
     <<: *dagster-common
     entrypoint:
@@ -81,6 +98,7 @@ services:
       - "8080"
     depends_on:
       - dagster-webserver
+      - next-web
     healthcheck:
       test: ["CMD-SHELL", "wget --spider --quiet http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s

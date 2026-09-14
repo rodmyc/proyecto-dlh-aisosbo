@@ -13,9 +13,12 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "pipeline/.venv/**",
+    "pipeline/.pytest_cache/**",
     "pipeline/.ruff_cache/**",
     "pipeline/.dagster-local/**",
     "pipeline/.test-tmp/**",
+    "exportaciones/**",
+    "data/**",
   ]),
 ]);
 

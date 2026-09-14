@@ -3,6 +3,7 @@
 .next
 node_modules
 data
+exportaciones
 pipeline/.venv
 pipeline/.pytest_cache
 pipeline/.ruff_cache
